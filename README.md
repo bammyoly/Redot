@@ -1,6 +1,6 @@
 # **Redot – Private NFT Auction Platform**
 
-*A privacy-preserving NFT auction dApp powered by Fully Homomorphic Encryption (FHE).*
+*A privacy-preserving NFT auction dApp powered by Zama Fully Homomorphic Encryption (FHE).*
 
 ---
 
