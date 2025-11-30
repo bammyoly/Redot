@@ -1,11 +1,4 @@
-Below is a **clean, professionally formatted README.md** for your project **Redot**.
-It explains the architecture, private bidding model, Zama FHE integration, security benefits, and how the dApp works.
-
-You can copy–paste this directly into your repo.
-
----
-
-# 🟥 **Redot – Private NFT Auction Platform**
+# **Redot – Private NFT Auction Platform**
 
 *A privacy-preserving NFT auction dApp powered by Fully Homomorphic Encryption (FHE).*
 
