@@ -33,6 +33,7 @@ const toHex = (v) => {
   throw new Error('Unexpected bytes-like value from FHE SDK');
 };
 
+/** Try multiple SDK entry points (bundle → CDN ESM → UMD) */
 async function loadRelayerSDK() {
   const normalize = (mod) => {
     const m =
@@ -108,27 +109,64 @@ export function FheProvider({ children }) {
         const _sdk = await loadRelayerSDK();
         setSdk(_sdk);
 
-        // Load WASM (no-op for some builds)
         await _sdk.initSDK();
 
-        if (typeof window === 'undefined')
-          throw new Error('Must run in browser context.');
-        if (!window.ethereum)
-          throw new Error('No wallet detected (window.ethereum missing).');
+        if (typeof window === 'undefined') {
+          setError('Must run in browser context.');
+          setReady(false);
+          return;
+        }
 
-        // Override relayer URL to .org domain
+        if (!window.ethereum) {
+          setError('No wallet detected. Install MetaMask or a Web3 wallet.');
+          setReady(false);
+          return;
+        }
+
+        // Check if there is at least one connected account
+        let accounts = [];
+        try {
+          accounts = await window.ethereum.request({
+            method: 'eth_accounts',
+          });
+        } catch (e) {
+          console.warn('[FHE] eth_accounts failed', e);
+        }
+
+        if (!accounts || accounts.length === 0) {
+          // Wallet present but not connected yet → just wait
+          setError('Connect your wallet to enable encrypted bidding.');
+          setReady(false);
+          return;
+        }
+
+        // Check chain
+        const chainIdHex = await window.ethereum.request({
+          method: 'eth_chainId',
+        });
+        const chainId = parseInt(chainIdHex, 16);
+
+        if (chainId !== _sdk.SepoliaConfig.chainId) {
+          setError(
+            `Wrong network. Please switch your wallet to Sepolia (chainId ${_sdk.SepoliaConfig.chainId}).`
+          );
+          setReady(false);
+          return;
+        }
+
         const cfg = {
           ..._sdk.SepoliaConfig,
           network: window.ethereum,
           relayerUrl: 'https://relayer.testnet.zama.org',
         };
 
-        console.log('[FHE] Creating instance with config:', cfg);
+        console.log('[FHE] cfg used:', cfg);
 
         const inst = await _sdk.createInstance(cfg);
 
-        if (!inst?.createEncryptedInput)
+        if (!inst?.createEncryptedInput) {
           throw new Error('Relayer instance invalid.');
+        }
 
         if (cancelled) return;
         setInstance(inst);
@@ -138,7 +176,15 @@ export function FheProvider({ children }) {
       } catch (e) {
         if (!cancelled) {
           console.error('[FHE init error]', e);
-          setError(e?.message || String(e));
+          // Simplify the scary ethers error for the UI
+          const msg = e?.message || String(e);
+          if (msg.includes('CALL_EXCEPTION')) {
+            setError(
+              'FHE init failed due to an on-chain call reverting. Check that your wallet is on Sepolia.'
+            );
+          } else {
+            setError(msg);
+          }
           setReady(false);
         }
       }
@@ -160,7 +206,6 @@ export function FheProvider({ children }) {
       };
     }
 
-    // Low-level helper used by encryptBid
     const encryptEuint64ForContract = async (
       contractAddress,
       userAddress,
@@ -183,10 +228,9 @@ export function FheProvider({ children }) {
           userAddress
         );
 
-        // For euint64 / externalEuint64
         input.add64(BigInt(valueUint64));
 
-        const enc = await input.encrypt(); // <--- relayer call here
+        const enc = await input.encrypt();
 
         const handle = toHex(enc?.handles?.[0] ?? '0x');
         const proof = toHex(enc?.inputProof ?? '0x');
@@ -206,11 +250,28 @@ export function FheProvider({ children }) {
         return { handle, proof };
       } catch (e) {
         console.error('[FHE encryptEuint64ForContract error]', e);
+        const msg = e?.message || String(e);
+
+        if (
+          msg.includes('Failed to fetch') ||
+          msg.includes('ERR_INTERNET_DISCONNECTED') ||
+          msg.includes('NetworkError')
+        ) {
+          throw new Error(
+            'Cannot reach Zama relayer. Check your internet/VPN/firewall and try again.'
+          );
+        }
+
+        if (msg.includes("Relayer didn't response correctly")) {
+          throw new Error(
+            'Zama relayer rejected the input-proof (HTTP 400). This usually means the contract is not accepted/enabled on the relayer side.'
+          );
+        }
+
         throw e;
       }
     };
 
-    // High-level helper for your auction dapp
     const encryptBid = async (contractAddress, userAddress, bidWei) => {
       const { handle, proof } = await encryptEuint64ForContract(
         contractAddress,
@@ -219,8 +280,8 @@ export function FheProvider({ children }) {
       );
 
       return {
-        encryptedAmount: handle, // externalEuint64 for Solidity
-        inputProof: proof, // bytes for FHE.fromExternal
+        encryptedAmount: handle,
+        inputProof: proof,
       };
     };
 
